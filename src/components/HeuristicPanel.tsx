@@ -1,0 +1,1469 @@
+import React, { useRef, useState } from "react";
+import {
+  Sliders,
+  Download,
+  Upload,
+  Cpu,
+  Sparkles,
+  RefreshCw,
+  Check,
+  AlertCircle,
+  Dna,
+  Save,
+  LogIn,
+  UserPlus,
+  LogOut,
+  FolderOpen,
+  Award,
+  ChevronRight,
+} from "lucide-react";
+import { HeuristicWeights, GameMetrics, TrainedAI, AIObjectives } from "../types";
+
+interface HeuristicPanelProps {
+  weights: HeuristicWeights;
+  onWeightsChange: (newWeights: HeuristicWeights) => void;
+  metrics: GameMetrics;
+  onAnalyzeBoard: () => void;
+  isAnalyzing: boolean;
+  advice: string | null;
+  recommendedWeights: HeuristicWeights | null;
+  onApplyRecommended: () => void;
+  onResetWeights: () => void;
+
+  // Breeder states
+  aiName: string;
+  onAiNameChange: (name: string) => void;
+  aiGeneration: number;
+  onAiGenerationChange: (gen: number) => void;
+  onEvolve: () => void;
+
+  // Cloud Persistence via users.json
+  currentUser: string | null;
+  onLoginSuccess: (username: string, savedAIs: TrainedAI[]) => void;
+  onLogout: () => void;
+  savedAIs: TrainedAI[];
+  onSaveToCloud: () => void;
+  onLoadFromCloud: (ai: TrainedAI) => void;
+
+  // AI Objectives starting from Gen 3
+  aiObjectives: AIObjectives;
+  onAiObjectivesChange: (newObjectives: AIObjectives) => void;
+}
+
+export function HeuristicPanel({
+  weights,
+  onWeightsChange,
+  metrics,
+  onAnalyzeBoard,
+  isAnalyzing,
+  advice,
+  recommendedWeights,
+  onApplyRecommended,
+  onResetWeights,
+  aiName,
+  onAiNameChange,
+  aiGeneration,
+  onAiGenerationChange,
+  onEvolve,
+  currentUser,
+  onLoginSuccess,
+  onLogout,
+  savedAIs,
+  onSaveToCloud,
+  onLoadFromCloud,
+  aiObjectives,
+  onAiObjectivesChange,
+}: HeuristicPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Local state for Auth forms
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [showExeInstructions, setShowExeInstructions] = useState(false);
+
+  // Serial code states and handlers
+  const [serialInput, setSerialInput] = useState("");
+  const [activeSerialCode, setActiveSerialCode] = useState("");
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  const handlePublishSerial = async () => {
+    setIsPublishing(true);
+    try {
+      const res = await fetch("/api/ai/serial/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: aiName,
+          generation: aiGeneration,
+          weights,
+          aiObjectives,
+          maxScore: metrics.linesCleared,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      if (data.success && data.code) {
+        setActiveSerialCode(data.code);
+        alert(`AI「${aiName}」の5桁シリアルコードを発行・登録しました！\nコード: ${data.code}`);
+      }
+    } catch (err: any) {
+      alert("シリアルコードの発行に失敗しました: " + err.message);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleLoadBySerial = async () => {
+    if (serialInput.length !== 5) {
+      alert("シリアルコードは5桁の数字を入力してください。");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/ai/serial/get/${serialInput}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      if (data.success && data.ai) {
+        const ai = data.ai;
+        onWeightsChange(ai.weights);
+        onAiNameChange(ai.name);
+        onAiGenerationChange(ai.generation);
+        if (ai.aiObjectives) {
+          onAiObjectivesChange(ai.aiObjectives);
+        }
+        setActiveSerialCode(ai.code);
+        alert(`シリアルコード「${ai.code}」からAI「${ai.name}」(第${ai.generation}世代) の遺伝子配列・戦術を読み込みました！`);
+      }
+    } catch (err: any) {
+      alert("シリアルコードの読み込みに失敗しました: " + err.message);
+    }
+  };
+
+  const handleSliderChange = (key: keyof HeuristicWeights, val: number) => {
+    onWeightsChange({
+      ...weights,
+      [key]: val,
+    });
+  };
+
+  const handleExportJSON = () => {
+    const aiData = {
+      name: aiName,
+      generation: aiGeneration,
+      weights,
+      aiObjectives,
+      maxScore: metrics.linesCleared,
+    };
+    const dataStr = JSON.stringify(aiData, null, 2);
+    const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr);
+    const exportFileDefaultName = `tetris_ai_${aiName.replace(/\s+/g, "_")}_g${aiGeneration}.json`;
+
+    const linkElement = document.createElement("a");
+    linkElement.setAttribute("href", dataUri);
+    linkElement.setAttribute("download", exportFileDefaultName);
+    linkElement.click();
+  };
+
+  const handleExportEXE = () => {
+    const jsContent = `/**
+ * Standalone Tetris AI Player CLI
+ * Generated by Tetris AI Breeder app
+ * Modeled with custom heuristic parameters for "${aiName}"
+ */
+
+const WEIGHTS = {
+  heightPenalty: ${weights.heightPenalty},
+  holesPenalty: ${weights.holesPenalty},
+  bumpinessPenalty: ${weights.bumpinessPenalty},
+  wellDepthPenalty: ${weights.wellDepthPenalty},
+  tSlotReward: ${weights.tSlotReward},
+  linesClearedReward: ${weights.linesClearedReward},
+  speedReward: ${weights.speedReward || 0},
+  flatnessReward: ${weights.flatnessReward || 0},
+  fourLineReward: ${weights.fourLineReward || 0},
+  tSpinReward: ${weights.tSpinReward || 0},
+  perfectClearReward: ${weights.perfectClearReward || 0},
+  avoidHoleCoveringPenalty: ${weights.avoidHoleCoveringPenalty || 0}
+};
+
+const OBJECTIVES = {
+  clearLine1: ${aiObjectives.clearLine1},
+  clearLine2: ${aiObjectives.clearLine2},
+  clearLine3: ${aiObjectives.clearLine3},
+  clearLine4: ${aiObjectives.clearLine4},
+  tss: ${aiObjectives.tss},
+  tsd: ${aiObjectives.tsd},
+  tst: ${aiObjectives.tst},
+  pc: ${aiObjectives.pc},
+  ren4Col: ${aiObjectives.ren4Col}
+};
+
+const COLS = 10;
+const ROWS = 20;
+
+const Tetromino = {
+  I: "I",
+  O: "O",
+  T: "T",
+  S: "S",
+  Z: "Z",
+  J: "J",
+  L: "L"
+};
+
+const SHAPES = {
+  I: [
+    [0, 0, 0, 0],
+    [1, 1, 1, 1],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0]
+  ],
+  O: [
+    [1, 1],
+    [1, 1]
+  ],
+  T: [
+    [0, 1, 0],
+    [1, 1, 1],
+    [0, 0, 0]
+  ],
+  S: [
+    [0, 1, 1],
+    [1, 1, 0],
+    [0, 0, 0]
+  ],
+  Z: [
+    [1, 1, 0],
+    [0, 1, 1],
+    [0, 0, 0]
+  ],
+  J: [
+    [1, 0, 0],
+    [1, 1, 1],
+    [0, 0, 0]
+  ],
+  L: [
+    [0, 0, 1],
+    [1, 1, 1],
+    [0, 0, 0]
+  ]
+};
+
+const SRS_KICKS_3X3 = {
+  "0->1": [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+  "1->0": [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+  "1->2": [[0, 0], [1, 0], [1, -1], [0, 2], [1, 2]],
+  "2->1": [[0, 0], [-1, 0], [-1, 1], [0, -2], [-1, -2]],
+  "2->3": [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]],
+  "3->2": [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+  "3->0": [[0, 0], [-1, 0], [-1, -1], [0, 2], [-1, 2]],
+  "0->3": [[0, 0], [1, 0], [1, 1], [0, -2], [1, -2]]
+};
+
+const SRS_KICKS_I = {
+  "0->1": [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+  "1->0": [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+  "1->2": [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]],
+  "2->1": [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+  "2->3": [[0, 0], [2, 0], [-1, 0], [2, 1], [-1, -2]],
+  "3->2": [[0, 0], [-2, 0], [1, 0], [-2, -1], [1, 2]],
+  "3->0": [[0, 0], [1, 0], [-2, 0], [1, -2], [-2, 1]],
+  "0->3": [[0, 0], [-1, 0], [2, 0], [-1, 2], [2, -1]]
+};
+
+function rotateMatrix(matrix, dir) {
+  const n = matrix.length;
+  const rotated = Array.from({ length: n }, () => Array(n).fill(0));
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (dir > 0) {
+        rotated[c][n - 1 - r] = matrix[r][c];
+      } else {
+        rotated[n - 1 - c][r] = matrix[r][c];
+      }
+    }
+  }
+  return rotated;
+}
+
+function checkCollision(matrix, px, py, board) {
+  for (let r = 0; r < matrix.length; r++) {
+    for (let c = 0; c < matrix[r].length; c++) {
+      if (matrix[r][c] !== 0) {
+        const boardX = px + c;
+        const boardY = py + r;
+        if (boardX < 0 || boardX >= COLS || boardY >= ROWS) {
+          return true;
+        }
+        if (boardY >= 0 && board[boardY][boardX] !== "") {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function rotatePieceSRS(piece, dir, board) {
+  if (piece.type === Tetromino.O) return piece;
+  const nextRotationIndex = (piece.rotationIndex + (dir > 0 ? 1 : 3)) % 4;
+  const rotatedMatrix = rotateMatrix(piece.matrix, dir);
+  const transitionKey = \`\${piece.rotationIndex}->\${nextRotationIndex}\`;
+  const kickTable = piece.type === Tetromino.I ? SRS_KICKS_I : SRS_KICKS_3X3;
+  const kicks = kickTable[transitionKey] || [[0, 0]];
+  for (const kick of kicks) {
+    const dx = kick[0];
+    const dy = -kick[1];
+    if (!checkCollision(rotatedMatrix, piece.x + dx, piece.y + dy, board)) {
+      return {
+        ...piece,
+        matrix: rotatedMatrix,
+        x: piece.x + dx,
+        y: piece.y + dy,
+        rotationIndex: nextRotationIndex,
+      };
+    }
+  }
+  return null;
+}
+
+function getGhostY(piece, board) {
+  let ghostY = piece.y;
+  while (!checkCollision(piece.matrix, piece.x, ghostY + 1, board)) {
+    ghostY++;
+  }
+  return ghostY;
+}
+
+function placePieceOnBoard(piece, board) {
+  const newBoard = board.map((row) => [...row]);
+  let isTSpin = false;
+  if (piece.type === Tetromino.T) {
+    const corners = [
+      { x: piece.x, y: piece.y },
+      { x: piece.x + 2, y: piece.y },
+      { x: piece.x, y: piece.y + 2 },
+      { x: piece.x + 2, y: piece.y + 2 },
+    ];
+    let occupiedCount = 0;
+    for (const corner of corners) {
+      if (
+        corner.x < 0 ||
+        corner.x >= COLS ||
+        corner.y >= ROWS ||
+        (corner.y >= 0 && newBoard[corner.y][corner.x] !== "")
+      ) {
+        occupiedCount++;
+      }
+    }
+    if (occupiedCount >= 3) {
+      isTSpin = true;
+    }
+  }
+  for (let r = 0; r < piece.matrix.length; r++) {
+    for (let c = 0; c < piece.matrix[r].length; c++) {
+      if (piece.matrix[r][c] !== 0) {
+        const boardY = piece.y + r;
+        const boardX = piece.x + c;
+        if (boardY >= 0 && boardY < ROWS && boardX >= 0 && boardX < COLS) {
+          newBoard[boardY][boardX] = piece.type;
+        }
+      }
+    }
+  }
+  let linesCleared = 0;
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (newBoard[r].every((cell) => cell !== "")) {
+      newBoard.splice(r, 1);
+      newBoard.unshift(Array(COLS).fill(""));
+      linesCleared++;
+      r++;
+    }
+  }
+  return { newBoard, linesCleared, isTSpin };
+}
+
+function analyzeBoardMetrics(board) {
+  const columnHeights = Array(COLS).fill(0);
+  let totalHoles = 0;
+  let bumpiness = 0;
+  let maxColHeight = 0;
+  let blocksAboveHoles = 0;
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][c] !== "") {
+        columnHeights[c] = ROWS - r;
+        break;
+      }
+    }
+    if (columnHeights[c] > maxColHeight) {
+      maxColHeight = columnHeights[c];
+    }
+  }
+  for (let c = 0; c < COLS; c++) {
+    let blockAbove = false;
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][c] !== "") {
+        blockAbove = true;
+      } else if (blockAbove && board[r][c] === "") {
+        totalHoles++;
+      }
+    }
+    let firstBlockRow = -1;
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][c] !== "") {
+        firstBlockRow = r;
+        break;
+      }
+    }
+    if (firstBlockRow !== -1) {
+      for (let r = firstBlockRow; r < ROWS; r++) {
+        if (board[r][c] === "") {
+          for (let ar = firstBlockRow; ar < r; ar++) {
+            if (board[ar][c] !== "") {
+              blocksAboveHoles++;
+            }
+          }
+        }
+      }
+    }
+  }
+  for (let c = 0; c < COLS - 1; c++) {
+    bumpiness += Math.abs(columnHeights[c] - columnHeights[c + 1]);
+  }
+  let tSlots = 0;
+  for (let r = 1; r < ROWS - 1; r++) {
+    for (let c = 1; c < COLS - 1; c++) {
+      if (board[r][c] === "") {
+        const up = board[r - 1][c] !== "";
+        const down = board[r + 1][c] !== "";
+        const left = board[r][c - 1] !== "";
+        const right = board[r][c + 1] !== "";
+        const occupiedCount = (up ? 1 : 0) + (down ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
+        if (occupiedCount >= 3) {
+          tSlots++;
+        }
+      }
+    }
+  }
+  let totalWellDepth = 0;
+  let deepWellsCount = 0;
+  for (let c = 0; c < COLS; c++) {
+    const leftHeight = c > 0 ? columnHeights[c - 1] : ROWS;
+    const rightHeight = c < COLS - 1 ? columnHeights[c + 1] : ROWS;
+    const currentHeight = columnHeights[c];
+    const surroundingMin = Math.min(leftHeight, rightHeight);
+    if (surroundingMin > currentHeight) {
+      const depth = surroundingMin - currentHeight;
+      if (depth >= 3) {
+        deepWellsCount++;
+      }
+      totalWellDepth += depth;
+    }
+  }
+  return {
+    columnHeights,
+    totalHoles,
+    bumpiness,
+    maxColHeight,
+    totalWellDepth,
+    deepWellsCount,
+    tSlots,
+    blocksAboveHoles,
+  };
+}
+
+function rateBoard(board, weights, linesCleared, isTSpin, objectives) {
+  const { columnHeights, totalHoles, bumpiness, totalWellDepth, deepWellsCount, tSlots, blocksAboveHoles } = analyzeBoardMetrics(board);
+  const sumHeights = columnHeights.reduce((sum, h) => sum + h, 0);
+  let score = 0;
+  score += sumHeights * weights.heightPenalty;
+  score += totalHoles * weights.holesPenalty;
+  score += bumpiness * weights.bumpinessPenalty;
+  const wellDepthValue = deepWellsCount >= 2 ? totalWellDepth : 0;
+  score += wellDepthValue * weights.wellDepthPenalty;
+  score += tSlots * weights.tSlotReward;
+  score += blocksAboveHoles * (weights.avoidHoleCoveringPenalty || 0);
+  if (linesCleared > 0) {
+    let multiplier = linesCleared;
+    if (linesCleared === 4) {
+      multiplier = 4 * (8 + (weights.fourLineReward || 0) * 10);
+    } else {
+      multiplier = linesCleared * (1 + (weights.flatnessReward || 0) * 2);
+    }
+    if (isTSpin) {
+      multiplier = linesCleared * (12 + (weights.tSpinReward || 0) * 8);
+    }
+    score += multiplier * weights.linesClearedReward;
+    if (objectives) {
+      if (linesCleared === 1 && !isTSpin && !objectives.clearLine1) score -= 5000;
+      if (linesCleared === 2 && !isTSpin && !objectives.clearLine2) score -= 5000;
+      if (linesCleared === 3 && !isTSpin && !objectives.clearLine3) score -= 5000;
+      if (linesCleared === 4 && !objectives.clearLine4) score -= 5000;
+      if (isTSpin && linesCleared === 1 && !objectives.tss) score -= 5000;
+      if (isTSpin && linesCleared === 2 && !objectives.tsd) score -= 5000;
+      if (isTSpin && linesCleared === 3 && !objectives.tst) score -= 5000;
+    }
+  }
+  const pcEnabled = objectives ? objectives.pc : true;
+  if (sumHeights === 0 && pcEnabled) {
+    score += (weights.perfectClearReward || 0) * 60;
+  }
+  if (objectives?.ren4Col) {
+    let rightBlocks = 0;
+    for (let c = 6; c < COLS; c++) {
+      rightBlocks += columnHeights[c];
+    }
+    score -= rightBlocks * 5.0;
+  }
+  return score;
+}
+
+function findBestMove(piece, holdPieceType, nextPieceType, board, weights, objectives) {
+  let bestMove = { x: 0, rotationIndex: 0, hold: false, score: -Infinity };
+  const optionsToTest = [];
+  optionsToTest.push({ type: piece.type, initialPiece: piece, hold: false });
+  if (holdPieceType) {
+    const hPiece = {
+      type: holdPieceType,
+      matrix: SHAPES[holdPieceType],
+      x: Math.floor((COLS - SHAPES[holdPieceType][0].length) / 2),
+      y: holdPieceType === Tetromino.I ? -1 : 0,
+      rotationIndex: 0
+    };
+    optionsToTest.push({ type: holdPieceType, initialPiece: hPiece, hold: true });
+  } else {
+    const hPiece = {
+      type: nextPieceType,
+      matrix: SHAPES[nextPieceType],
+      x: Math.floor((COLS - SHAPES[nextPieceType][0].length) / 2),
+      y: nextPieceType === Tetromino.I ? -1 : 0,
+      rotationIndex: 0
+    };
+    optionsToTest.push({ type: nextPieceType, initialPiece: hPiece, hold: true });
+  }
+  for (const opt of optionsToTest) {
+    for (let rot = 0; rot < 4; rot++) {
+      let rotatedPiece = { ...opt.initialPiece };
+      let validRot = true;
+      for (let r = 0; r < rot; r++) {
+        const res = rotatePieceSRS(rotatedPiece, 1, board);
+        if (res) {
+          rotatedPiece = res;
+        } else {
+          validRot = false;
+          break;
+        }
+      }
+      if (!validRot) continue;
+      const minX = -3;
+      const maxX = COLS + 3;
+      for (let x = minX; x <= maxX; x++) {
+        const testPiece = { ...rotatedPiece, x };
+        if (checkCollision(testPiece.matrix, testPiece.x, testPiece.y, board)) {
+          continue;
+        }
+        const droppedPiece = { ...testPiece, y: getGhostY(testPiece, board) };
+        const { newBoard, linesCleared, isTSpin } = placePieceOnBoard(droppedPiece, board);
+        const rating = rateBoard(newBoard, weights, linesCleared, isTSpin, objectives);
+        if (rating > bestMove.score) {
+          bestMove = { x, rotationIndex: rot, hold: opt.hold, score: rating };
+        }
+      }
+    }
+  }
+  return bestMove;
+}
+
+const ANSI_COLORS = {
+  I: "\\x1b[46m  \\x1b[0m", // Cyan
+  O: "\\x1b[43m  \\x1b[0m", // Yellow
+  T: "\\x1b[45m  \\x1b[0m", // Magenta
+  S: "\\x1b[42m  \\x1b[0m", // Green
+  Z: "\\x1b[41m  \\x1b[0m", // Red
+  J: "\\x1b[44m  \\x1b[0m", // Blue
+  L: "\\x1b[47m  \\x1b[0m", // White / Orange
+  Empty: "\\x1b[90m. \\x1b[0m" // Dark gray dot
+};
+
+function generateBag() {
+  const bag = [Tetromino.I, Tetromino.O, Tetromino.T, Tetromino.S, Tetromino.Z, Tetromino.J, Tetromino.L];
+  for (let i = bag.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+  return bag;
+}
+
+function startCliGame() {
+  let board = Array.from({ length: ROWS }, () => Array(COLS).fill(""));
+  let bag = generateBag();
+  let holdPieceType = null;
+  let nextPieces = [];
+  while (nextPieces.length < 5) {
+    if (bag.length === 0) bag = generateBag();
+    nextPieces.push(bag.shift());
+  }
+
+  let score = 0;
+  let linesClearedTotal = 0;
+  let isGameOver = false;
+
+  console.log("\\x1Bc");
+  console.log("=== Tetris AI Standalone Terminal Player ===");
+  console.log("Custom tuned parameters loaded successfully!");
+  console.log("Press Ctrl+C to stop simulation.");
+  console.log("Starting in 2 seconds...");
+
+  setTimeout(() => {
+    const tick = setInterval(() => {
+      if (isGameOver) {
+        clearInterval(tick);
+        console.log("\\x1b[31;1mGAME OVER!\\x1b[0m");
+        console.log(\`Final Score: \\x1b[33;1m\${score}\\x1b[0m\`);
+        console.log(\`Lines Cleared: \\x1b[36;1m\${linesClearedTotal}\\x1b[0m\`);
+        return;
+      }
+
+      const activeType = nextPieces.shift();
+      if (bag.length === 0) bag = generateBag();
+      nextPieces.push(bag.shift());
+
+      const activePiece = {
+        type: activeType,
+        matrix: SHAPES[activeType],
+        x: Math.floor((COLS - SHAPES[activeType][0].length) / 2),
+        y: activeType === Tetromino.I ? -1 : 0,
+        rotationIndex: 0
+      };
+
+      const move = findBestMove(activePiece, holdPieceType, nextPieces[0], board, WEIGHTS, OBJECTIVES);
+
+      let finalPieceType = activeType;
+      let placedPiece = { ...activePiece };
+
+      if (move.hold) {
+        if (holdPieceType) {
+          finalPieceType = holdPieceType;
+          holdPieceType = activeType;
+        } else {
+          holdPieceType = activeType;
+          finalPieceType = nextPieces.shift();
+          if (bag.length === 0) bag = generateBag();
+          nextPieces.push(bag.shift());
+        }
+        placedPiece = {
+          type: finalPieceType,
+          matrix: SHAPES[finalPieceType],
+          x: Math.floor((COLS - SHAPES[finalPieceType][0].length) / 2),
+          y: finalPieceType === Tetromino.I ? -1 : 0,
+          rotationIndex: 0
+        };
+      }
+
+      for (let r = 0; r < move.rotationIndex; r++) {
+        const rotated = rotatePieceSRS(placedPiece, 1, board);
+        if (rotated) placedPiece = rotated;
+      }
+      placedPiece.x = move.x;
+      const ghostY = getGhostY(placedPiece, board);
+      placedPiece.y = ghostY;
+
+      if (checkCollision(placedPiece.matrix, placedPiece.x, placedPiece.y, board)) {
+        isGameOver = true;
+        return;
+      }
+
+      const result = placePieceOnBoard(placedPiece, board);
+      board = result.newBoard;
+      linesClearedTotal += result.linesCleared;
+      
+      if (result.linesCleared > 0) {
+        score += [0, 100, 300, 500, 800][result.linesCleared] || 1000;
+        if (result.isTSpin) {
+          score += 400 * result.linesCleared;
+        }
+      }
+
+      console.log("\\x1B[H");
+      console.log(\`\\x1b[1mAI Name:\\x1b[0m ${aiName} | \\x1b[33;1mScore:\\x1b[0m \${score} | \\x1b[36;1mLines:\\x1b[0m \${linesClearedTotal}\`);
+      console.log(\`\\x1b[1mHold:\\x1b[0m [\${holdPieceType || \" \"}] | \\x1b[1mNext:\\x1b[0m [\${nextPieces.slice(0, 3).join(\", \")}]\`);
+      console.log(\"+--------------------+\");
+
+      for (let r = 0; r < ROWS; r++) {
+        let rowStr = \"| \";
+        for (let c = 0; c < COLS; c++) {
+          const cell = board[r][c];
+          if (cell) {
+            rowStr += ANSI_COLORS[cell] || \"  \";
+          } else {
+            rowStr += ANSI_COLORS.Empty;
+          }
+        }
+        rowStr += \" |\";
+        console.log(rowStr);
+      }
+      console.log(\"+--------------------+\");
+      console.log(\`Using heuristics: heights_penalty=\${WEIGHTS.heightPenalty.toFixed(2)}, holes_penalty=\${WEIGHTS.holesPenalty.toFixed(2)}\`);
+    }, 100);
+  }, 2000);
+}
+
+startCliGame();
+`;
+
+    const dataUri = "data:text/javascript;charset=utf-8," + encodeURIComponent(jsContent);
+    const linkElement = document.createElement("a");
+    linkElement.setAttribute("href", dataUri);
+    linkElement.setAttribute("download", `ai-player-${aiName.replace(/\s+/g, "_")}.js`);
+    linkElement.click();
+    setShowExeInstructions(true);
+  };
+
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (parsed.weights) {
+          onWeightsChange(parsed.weights as HeuristicWeights);
+          if (parsed.name) onAiNameChange(parsed.name);
+          if (parsed.generation) onAiGenerationChange(parsed.generation);
+          if (parsed.aiObjectives) onAiObjectivesChange(parsed.aiObjectives);
+          alert(`AI遺伝子「${parsed.name || "未命名"}」(第${parsed.generation || 1}世代) を読み込みました！`);
+        } else {
+          // Fallback if plain weight JSON
+          onWeightsChange(parsed as HeuristicWeights);
+          alert("AIの重みパラメータ（遺伝子配列）のみを読み込みました！");
+        }
+      } catch (err) {
+        alert("エラー: JSONファイルの解析に失敗しました。");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Auth execution: Register or Login
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    const endpoint = isRegisterMode ? "/api/auth/register" : "/api/auth/login";
+
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: authUsername, password: authPassword }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "認証に失敗しました。");
+      }
+
+      if (isRegisterMode) {
+        setAuthSuccess("アカウントを登録しました！ログインしてください。");
+        setIsRegisterMode(false);
+      } else {
+        onLoginSuccess(data.username, data.trainedAIs || []);
+        setIsAuthOpen(false);
+        setAuthUsername("");
+        setAuthPassword("");
+      }
+    } catch (err: any) {
+      setAuthError(err.message);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-slate-300 shadow-xl space-y-5">
+      {/* 1. Account Persistence Header (users.json) */}
+      <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-850 space-y-3">
+        {currentUser ? (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <p className="text-xs text-slate-400">
+                ブリーダー: <strong className="text-white text-sm">{currentUser}</strong>
+              </p>
+            </div>
+            <button
+              onClick={onLogout}
+              className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors bg-slate-900 px-2 py-1 rounded border border-slate-800"
+            >
+              <LogOut className="w-3 h-3" />
+              ログアウト
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-slate-400 flex items-center gap-1.5">
+                <Dna className="w-3.5 h-3.5 text-indigo-400" />
+                オンライン育成セーブ（users.json）
+              </p>
+              <button
+                onClick={() => setIsAuthOpen(!isAuthOpen)}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 bg-slate-900 px-2 py-1 rounded border border-slate-800"
+              >
+                {isAuthOpen ? "閉じる" : "ログイン / 新規登録"}
+              </button>
+            </div>
+
+            {isAuthOpen && (
+              <form onSubmit={handleAuthSubmit} className="space-y-2.5 pt-2 border-t border-slate-850 animate-fade-in">
+                {authError && <div className="text-[10px] text-red-400 bg-red-950/30 p-1.5 rounded border border-red-900/40">{authError}</div>}
+                {authSuccess && <div className="text-[10px] text-emerald-400 bg-emerald-950/30 p-1.5 rounded border border-emerald-900/40">{authSuccess}</div>}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="ユーザー名"
+                    value={authUsername}
+                    onChange={(e) => setAuthUsername(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                  <input
+                    type="password"
+                    placeholder="パスワード"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded py-1 text-xs font-bold transition-all"
+                  >
+                    {isRegisterMode ? "新規ブリーダー登録" : "ブリーダーログイン"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsRegisterMode(!isRegisterMode)}
+                    className="text-[10px] text-slate-400 hover:text-white underline px-1"
+                  >
+                    {isRegisterMode ? "ログインへ" : "新規登録へ"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 2. AI Profile (Nametag, Gen & Evolution) */}
+      <div className="bg-gradient-to-br from-indigo-950/30 to-purple-950/30 border border-indigo-900/30 rounded-2xl p-4 space-y-3.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
+            <Dna className="w-3 h-3" />
+            AI Breeder Lab
+          </span>
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-slate-400">現在世代:</span>
+            <span className="font-mono font-bold text-white bg-indigo-600/20 px-2 py-0.5 rounded border border-indigo-500/30">
+              第 {aiGeneration} 世代 (Gen {aiGeneration})
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[11px] text-slate-400 font-medium block">
+            AIペットのなまえ（愛称）
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={aiName}
+              onChange={(e) => onAiNameChange(e.target.value)}
+              placeholder="例: テトちゃん"
+              className="flex-1 bg-slate-950 border border-slate-850 rounded-xl px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500 font-semibold"
+            />
+            <button
+              onClick={onEvolve}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3 rounded-xl transition-all flex items-center gap-1.5 shadow"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              世代を進める
+            </button>
+          </div>
+        </div>
+
+        {/* Saved AI models inside users.json list */}
+        {currentUser && savedAIs.length > 0 && (
+          <div className="border-t border-indigo-950 pt-2.5">
+            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mb-1.5">
+              保存したお気に入り個体の一覧:
+            </span>
+            <div className="max-h-[85px] overflow-y-auto space-y-1 pr-1">
+              {savedAIs.map((ai) => (
+                <div
+                   key={ai.id}
+                   className="bg-slate-950 p-2 rounded-lg border border-slate-850 flex items-center justify-between hover:border-slate-700 transition-all text-xs"
+                >
+                  <div>
+                    <span className="text-white font-bold">{ai.name}</span>
+                    <span className="text-[9px] text-slate-500 ml-1.5 font-mono">
+                      Gen {ai.generation}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onLoadFromCloud(ai)}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-0.5"
+                  >
+                    呼び出し
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 5-Digit Serial Code Section */}
+        <div className="border-t border-indigo-950/60 pt-3 mt-1.5 space-y-2.5">
+          <span className="text-[10px] text-indigo-300 font-bold uppercase tracking-wider block">
+            シリアルコード（5桁）で共有＆呼び出し
+          </span>
+          
+          <div className="flex gap-2">
+            <input
+              type="text"
+              maxLength={5}
+              placeholder="5桁のコード (例: 12345)"
+              value={serialInput}
+              onChange={(e) => setSerialInput(e.target.value.replace(/\D/g, ""))}
+              className="flex-1 bg-slate-950 border border-slate-850 rounded-xl px-2.5 py-1.5 text-xs text-center font-mono tracking-widest text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+            />
+            <button
+              onClick={handleLoadBySerial}
+              className="bg-slate-950 hover:bg-slate-850 border border-slate-850 hover:border-slate-800 text-indigo-400 hover:text-indigo-300 font-bold text-xs px-3 py-1.5 rounded-xl transition-all"
+            >
+              呼び出し (Summon)
+            </button>
+          </div>
+
+          <div className="bg-slate-950/60 rounded-xl border border-slate-850/60 p-2.5 flex items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <span className="text-[9px] text-slate-500 block">現在のAIのシリアルコード</span>
+              <span className="font-mono font-bold text-xs text-indigo-400">
+                {activeSerialCode ? `${activeSerialCode}` : "未発行"}
+              </span>
+            </div>
+            
+            <button
+              onClick={handlePublishSerial}
+              disabled={isPublishing}
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-[10px] px-2.5 py-1.5 rounded-lg transition-all"
+            >
+              {isPublishing ? "発行中..." : "コードを発行・登録"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 2.5. AI Play Objectives Toggle (Gen >= 3 requirement) */}
+      <div className="bg-slate-900 border border-slate-850 rounded-2xl p-4 space-y-3">
+        <div>
+          <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
+            <Cpu className="w-4 h-4 text-indigo-400" />
+            AI消去＆戦術目標 (Tactical Objectives)
+          </h4>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            第3世代(Gen 3)以降から、AIがプレイ中に使用する戦術を選択可能です。
+          </p>
+        </div>
+
+        {aiGeneration < 3 ? (
+          <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850/50 text-center space-y-1">
+            <span className="text-[11px] font-bold text-slate-500 block">🔒 戦術目標設定 ロック中</span>
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              「世代を進める」を実行して<strong>第3世代以上</strong>に達すると、戦術チェックボックスが解放され、1〜3ライン消去制限、T-Spin(TSS/TSD/TST)制限、Perfect Clear、4列REN特化などを自由に制御できるようになります。
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.clearLine1}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, clearLine1: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">1LINE消去</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.clearLine2}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, clearLine2: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">2LINE消去</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.clearLine3}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, clearLine3: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">3LINE消去</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.clearLine4}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, clearLine4: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">4LINE消去 (テトリス)</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.tss}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, tss: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">TSS (Single)</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.tsd}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, tsd: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">TSD (Double)</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.tst}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, tst: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">TST (Triple)</span>
+            </label>
+            <label className="flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-850/50 cursor-pointer hover:bg-slate-950 hover:border-slate-800 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.pc}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, pc: e.target.checked })}
+                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-slate-300 text-[10px] font-medium">PC (全消し)</span>
+            </label>
+            <label className="col-span-2 flex items-center gap-2 bg-slate-950/60 p-2.5 rounded-xl border border-indigo-900/30 cursor-pointer hover:bg-slate-950 hover:border-indigo-900/60 transition-all select-none">
+              <input
+                type="checkbox"
+                checked={aiObjectives.ren4Col}
+                onChange={(e) => onAiObjectivesChange({ ...aiObjectives, ren4Col: e.target.checked })}
+                className="rounded text-indigo-500 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 border-slate-800"
+              />
+              <span className="text-indigo-300 text-[10px] font-bold">4列REN盤面維持 (右側4列を空ける)</span>
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* 3. Performance Record Metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-950 p-3 rounded-xl border border-slate-850 text-center">
+        <div className="space-y-0.5">
+          <span className="text-[9px] text-slate-500 font-mono block">LINES CLEARED</span>
+          <span className="text-base font-bold font-mono text-white">{metrics.linesCleared}</span>
+        </div>
+        <div className="space-y-0.5">
+          <span className="text-[9px] text-slate-500 font-mono block">LEVEL REACHED</span>
+          <span className="text-base font-bold font-mono text-white">{metrics.level}</span>
+        </div>
+        <div className="space-y-0.5">
+          <span className="text-[9px] text-slate-500 font-mono block">HOLES (空洞)</span>
+          <span className="text-base font-bold font-mono text-red-400">{metrics.holesCount}</span>
+        </div>
+        <div className="space-y-0.5">
+          <span className="text-[9px] text-slate-500 font-mono block">MAX HEIGHT</span>
+          <span className="text-base font-bold font-mono text-orange-400">{metrics.maxHeight}/20</span>
+        </div>
+      </div>
+
+      {/* 4. Weight sliders */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <Sliders className="w-3.5 h-3.5 text-indigo-400" />
+            AI遺伝子コードの微調整（Heuristic Gene）
+          </h3>
+          <button
+            onClick={onResetWeights}
+            className="text-[10px] text-slate-500 hover:text-white flex items-center gap-0.5 transition-colors font-medium font-sans"
+          >
+            初期配列
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Height Penalty */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">Height Penalty (高さ)</span>
+              <span className="text-red-400 font-mono font-bold text-[11px]">{weights.heightPenalty.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="-2"
+              max="0"
+              step="0.01"
+              value={weights.heightPenalty}
+              onChange={(e) => handleSliderChange("heightPenalty", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* Holes Penalty */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">Holes Penalty (空洞)</span>
+              <span className="text-red-400 font-mono font-bold text-[11px]">{weights.holesPenalty.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="-3"
+              max="0"
+              step="0.01"
+              value={weights.holesPenalty}
+              onChange={(e) => handleSliderChange("holesPenalty", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* Bumpiness Penalty */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">Bumpiness Penalty (凹凸)</span>
+              <span className="text-red-400 font-mono font-bold text-[11px]">{weights.bumpinessPenalty.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="-2"
+              max="0"
+              step="0.01"
+              value={weights.bumpinessPenalty}
+              onChange={(e) => handleSliderChange("bumpinessPenalty", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* Lines Cleared Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">Lines Reward (ライン消去)</span>
+              <span className="text-emerald-400 font-mono font-bold text-[11px]">{weights.linesClearedReward.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={weights.linesClearedReward}
+              onChange={(e) => handleSliderChange("linesClearedReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* Well Depth Penalty */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">Well Depth Penalty (深穴)</span>
+              <span className="text-red-400 font-mono font-bold text-[11px]">{weights.wellDepthPenalty.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="-2"
+              max="0"
+              step="0.01"
+              value={weights.wellDepthPenalty}
+              onChange={(e) => handleSliderChange("wellDepthPenalty", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* T-Slot Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">T-Slot Reward (T受け)</span>
+              <span className="text-emerald-400 font-mono font-bold text-[11px]">{weights.tSlotReward.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={weights.tSlotReward}
+              onChange={(e) => handleSliderChange("tSlotReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ① Speed Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">① Speed Reward (AI操作速度)</span>
+              <span className="text-amber-400 font-mono font-bold text-[11px]">{(weights.speedReward || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={weights.speedReward || 0}
+              onChange={(e) => handleSliderChange("speedReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ② Flatness Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">② Flatness Reward (地形平坦さ)</span>
+              <span className="text-emerald-400 font-mono font-bold text-[11px]">{(weights.flatnessReward || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.01"
+              value={weights.flatnessReward || 0}
+              onChange={(e) => handleSliderChange("flatnessReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ③ Four-Line Clear Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">③ 4LINE Reward (テトリス特化)</span>
+              <span className="text-indigo-400 font-mono font-bold text-[11px]">{(weights.fourLineReward || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="5"
+              step="0.01"
+              value={weights.fourLineReward || 0}
+              onChange={(e) => handleSliderChange("fourLineReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ④ T-Spin Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">④ T-Spin Reward (Tスピン優先)</span>
+              <span className="text-purple-400 font-mono font-bold text-[11px]">{(weights.tSpinReward || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="5"
+              step="0.01"
+              value={weights.tSpinReward || 0}
+              onChange={(e) => handleSliderChange("tSpinReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ⑤ Perfect Clear Reward */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">⑤ Perfect Clear (全消し特化)</span>
+              <span className="text-pink-400 font-mono font-bold text-[11px]">{(weights.perfectClearReward || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              step="0.01"
+              value={weights.perfectClearReward || 0}
+              onChange={(e) => handleSliderChange("perfectClearReward", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+
+          {/* ⑥ Avoid Hole Covering Penalty */}
+          <div className="space-y-1 bg-slate-950/40 p-2.5 rounded-xl border border-slate-850/60">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400 text-[11px] font-medium">⑥ Hole Cover Penalty (下穴上の設置回避)</span>
+              <span className="text-red-400 font-mono font-bold text-[11px]">{(weights.avoidHoleCoveringPenalty || 0).toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="-5"
+              max="0"
+              step="0.01"
+              value={weights.avoidHoleCoveringPenalty || 0}
+              onChange={(e) => handleSliderChange("avoidHoleCoveringPenalty", parseFloat(e.target.value))}
+              className="w-full accent-indigo-500 h-1 rounded-lg cursor-pointer bg-slate-800"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 5. Save & Export Controls */}
+      <div className="space-y-2 border-t border-slate-800/60 pt-4">
+        <div className="flex gap-2">
+          {currentUser ? (
+            <button
+              onClick={onSaveToCloud}
+              className="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-bold shadow transition-all"
+            >
+              <Save className="w-4 h-4" />
+              遺伝子をセーブ
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setIsAuthOpen(true);
+                alert("users.json に保存するには、上部フォームからログイン（ブリーダーログイン）してください。");
+              }}
+              className="flex-1 bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white rounded-xl py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-semibold transition-all"
+            >
+              <LogIn className="w-4 h-4 text-indigo-400" />
+              ログインしてセーブ
+            </button>
+          )}
+
+          <button
+            onClick={handleExportJSON}
+            className="bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white rounded-xl py-2 px-3.5 flex items-center justify-center gap-1.5 text-xs transition-all font-medium"
+            title="JSONファイルとしてダウンロード"
+          >
+            <Download className="w-3.5 h-3.5 text-indigo-400" />
+            ファイル出力
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-white rounded-xl py-2 px-3.5 flex items-center justify-center gap-1.5 text-xs transition-all font-medium"
+            title="JSONファイルをインポート"
+          >
+            <Upload className="w-3.5 h-3.5 text-indigo-400" />
+            読込
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportJSON}
+            accept=".json"
+            className="hidden"
+          />
+        </div>
+
+        {/* 5.5. Standalone EXE / CLI Script Export */}
+        <button
+          onClick={handleExportEXE}
+          className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-bold shadow transition-all"
+        >
+          <Cpu className="w-4 h-4 text-white" />
+          EXE・ローカル用スタンドアロンJSを出力
+        </button>
+
+        {showExeInstructions && (
+          <div className="bg-slate-950 border border-indigo-900/40 p-3 rounded-xl space-y-2 text-xs">
+            <div className="flex justify-between items-center border-b border-slate-850 pb-1.5">
+              <span className="font-bold text-indigo-400 text-[10px] tracking-wider uppercase flex items-center gap-1">
+                🚀 Windows .exe パッケージング手順
+              </span>
+              <button
+                onClick={() => setShowExeInstructions(false)}
+                className="text-[10px] text-slate-500 hover:text-white"
+              >
+                閉じる
+              </button>
+            </div>
+            <p className="text-slate-400 text-[10px] leading-relaxed">
+              ダウンロードしたスクリプトは、あなたのPC上のコマンドラインで動作する完全なテトリスAIエンジンです。
+              以下の手順を実行することで、簡単に1つの <strong>.exe ファイル</strong>に変換できます！
+            </p>
+            <div className="bg-slate-900 p-2 rounded-lg border border-slate-800 font-mono text-[9px] text-slate-300 space-y-1 select-all overflow-x-auto whitespace-pre">
+              {`# 1. パッケージングツールをグローバルインストール
+npm install -g pkg
+
+# 2. Windows用の.exe実行ファイルを作成
+pkg ai-player-${aiName.replace(/\s+/g, "_")}.js -t node18-win-x64 -o tetris-ai.exe
+
+# 3. 作成した.exeを実行
+./tetris-ai.exe`}
+            </div>
+            <p className="text-[10px] text-emerald-400 font-medium">
+              ★ コマンドプロンプト等で起動すると、あなたの育てたAIが超高速で自立プレイする様子がグラフィカルなアスキーアートで描画されます！
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* 6. Gemini Coach Training section */}
+      <div className="space-y-2.5 border-t border-slate-800/60 pt-4 bg-indigo-950/10 -mx-5 -mb-5 p-5 rounded-b-2xl border-l-2 border-l-indigo-500">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-indigo-400 font-semibold text-xs">
+            <Cpu className="w-3.5 h-3.5 animate-pulse" />
+            <span>Gemini AI：バイオ・学習アドバイザー</span>
+          </div>
+          <button
+            onClick={onAnalyzeBoard}
+            disabled={isAnalyzing}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-lg text-[10px] py-1.5 px-3 flex items-center gap-1 font-semibold transition-all"
+          >
+            {isAnalyzing ? "解析中..." : "盤面から進化案を生成"}
+          </button>
+        </div>
+
+        {advice ? (
+          <div className="space-y-2.5 text-xs bg-slate-950 p-3 border border-slate-850 rounded-xl">
+            <div className="space-y-0.5">
+              <span className="text-[9px] text-indigo-400 font-bold block uppercase tracking-wider">
+                学習指南
+              </span>
+              <p className="text-slate-200 font-sans leading-relaxed text-[11px]">{advice}</p>
+            </div>
+
+            {recommendedWeights && (
+              <div className="space-y-2 border-t border-slate-850 pt-2.5">
+                <span className="text-[9px] text-indigo-400 font-bold block uppercase tracking-wider">
+                  遺伝子変異案 (Weights Optimization)
+                </span>
+                <button
+                  onClick={onApplyRecommended}
+                  className="w-full bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 hover:border-indigo-500/50 text-indigo-300 rounded-lg py-1 text-[11px] font-bold text-center transition-all flex items-center justify-center gap-1"
+                >
+                  <Check className="w-3 h-3" />
+                  この遺伝子変異(変数の最適化)を適用する
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-[10px] text-slate-500 flex items-center gap-1.5 bg-slate-950 p-3 border border-slate-900 rounded-xl">
+            <AlertCircle className="w-3.5 h-3.5 text-indigo-500/50" />
+            <span>「盤面から進化案を生成」で、Geminiが現在の地形を見ながら最適なパラメータ変異案を提示します。</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

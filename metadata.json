@@ -1,0 +1,6 @@
+{
+  "name": "SRS-X Tetris AI Brain",
+  "description": "SRS-X Tetris with a built-in customizable real-time AI player, JSON heuristic state import/export, and strategic optimizations/coaching powered by Gemini 3.5 Flash.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
